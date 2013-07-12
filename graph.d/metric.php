@@ -114,8 +114,8 @@ function graph_metric ( &$rrdtool_graph ) {
     } else {
         $rrdtool_graph['vertical-label'] = $metricname;
     }
-    $md5 = md5($rrdtools_graph['vertical-label']);
-    $color = substr($md5,1,6);
+    $md5 = md5($metricname);
+    $color = substr($md5,0,6);
     //# the actual graph...
     $series  = "DEF:'sum'='$rrd_dir/$metricname.rrd:sum':AVERAGE ";
     $series .= "AREA:'sum'#${color}:'$subtitle_one   '";
