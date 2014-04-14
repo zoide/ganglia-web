@@ -1,4 +1,11 @@
-ganglia-webfrontend (3.5.10-1wheezy3) wheezy; urgency=low
+ganglia-webfrontend (3.6.1+1wheezy1) wheezy; urgency=medium
+
+  * Non-maintainer upload.
+  * merged with origin/3.6.1
+
+ -- Udo Waechter <u.waechter@mysportworld.de>  Mon, 14 Apr 2014 11:20:25 +0200
+
+ganglia-webfrontend (3.5.10+1wheezy3) wheezy; urgency=low
 
   [ do ]
   * merged with master.
@@ -7,13 +14,13 @@ ganglia-webfrontend (3.5.10-1wheezy3) wheezy; urgency=low
 
  -- do <do@maketank.net>  Fri, 12 Jul 2013 21:11:54 +0200
 
-ganglia-webfrontend (3.5.10-1wheezy2) wheezy; urgency=low
+ganglia-webfrontend (3.5.10+1wheezy2) wheezy; urgency=low
 
   * path fixes for postinst script 
 
  -- root <root@vester.mysportgroup.de>  Thu, 11 Jul 2013 14:48:51 +0200
 
-ganglia-webfrontend (3.5.10-1wheezy1) wheezy; urgency=low
+ganglia-webfrontend (3.5.10+1wheezy1) wheezy; urgency=low
 
   * new version 
 
