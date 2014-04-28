@@ -1,4 +1,4 @@
-ganglia-web-\d.*
+ganglia-web-?\..*
 .buildpath
 .project
 conf.php
