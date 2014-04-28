@@ -1,3 +1,6 @@
+ganglia-web-\d.*
+.buildpath
+.project
 conf.php
 conf_default.php
 ganglia-web.spec
