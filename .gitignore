@@ -6,3 +6,4 @@ conf_default.php
 ganglia-web.spec
 version.php
 apache.conf
+/ganglia-web-3.6.2
