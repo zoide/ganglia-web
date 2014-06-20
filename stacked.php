@@ -96,7 +96,8 @@ $first_color = get_col(0);
 $min_index = min(array_keys($hosts));
 
 foreach($hosts as $index =>  $host) {
-    $cx = $index/(1+count($hosts));
+    $cx = $i/(1+count($hosts));
+    $i++;
     $color = get_col($cx);
     if ($conf['strip_domainname'])
          $host = strip_domainname($host);
@@ -138,7 +139,7 @@ if (isset($_GET['debug']))
 else
     {
     header ("Content-type: image/png");
-    passthru($command);
+    my_passthru($command);
     }
 
 function HSV_TO_RGB ($H, $S, $V){

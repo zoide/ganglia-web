@@ -15,7 +15,7 @@ function constructUrl(index, period) {
 function constructGraphs() {
   for (var i=0; i<metrics.length; i++) {
     constructUrl(i, period);
-    aliases[i] = metrics[i].name;
+    aliases[i] = metrics[i].alias || metrics[i].name;
     datum[i] = [{ x:0, y:0 }];
     graphs[i] = new Rickshaw.Graph({
       element: document.querySelector('.graph' + i),
@@ -95,6 +95,9 @@ function getData(cb, i) {
           y: d[0].datapoints[0][0] || graphs[i].lastKnownValue || 0
         };
         for (var j=1; j<d[0].datapoints.length; j++) {
+          if (isNaN(d[0].datapoints[j][0]) || isNaN(d[0].datapoints[j][1])) {
+            continue;
+          }
           myDatum[j] = {
             x: d[0].datapoints[j][1],
             y: d[0].datapoints[j][0] || graphs[i].lastKnownValue

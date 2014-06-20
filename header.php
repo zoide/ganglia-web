@@ -43,44 +43,37 @@ function make_cols_menu() {
   return $cols_menu;
 }
 
-function make_metric_cols_menu() {
-  global $conf;
-
-  $metric_cols_menu = "<select name=\"mc\" OnChange=\"ganglia_form.submit();\">\n";
-
-  foreach(range(1,25) as $metric_cols) {
-    $metric_cols_menu .= "<option value=$metric_cols ";
-    if ($metric_cols == $conf['metriccols'])
-      $metric_cols_menu .= "selected";
-    $metric_cols_menu .= ">$metric_cols\n";
-  }
-  $metric_cols_menu .= "</select>\n";
-  return $metric_cols_menu;
-}
-
 function make_sort_menu($context, $sort) {
   $sort_menu = "";
   if ($context == "meta" or $context == "cluster") {
-    $context_sorts[] = "ascending";
-    $context_sorts[] = "descending";
-    $context_sorts[] = "by name";
+    $context_sorts[] = array("ascending",
+			     "Sort hosts by ascending metric value");
+    $context_sorts[] = array("descending",
+			     "Sort hosts by descending metric value");
+    $context_sorts[] = array("by name",
+			     "Sort hosts by name");
 
     // Show sort order options for meta context only:
 
     if ($context == "meta" ) {
-      $context_sorts[] = "by hosts up";
-      $context_sorts[] = "by hosts down";
+      $context_sorts[] = array("by hosts up",
+			       "Display hosts in UP state first");
+      $context_sorts[] = array("by hosts down",
+			       "Display hosts in DOWN state first");
     }
 
-    $sort_menu = "Sorted&nbsp;&nbsp;";
+    $sort_menu = "<div id=\"sort_menu\" class=\"nobr\" style=\"display:inline\">Sorted&nbsp;&nbsp;";
     foreach ($context_sorts as $v) {
-      $url = rawurlencode($v);
-      if ($v == $sort)
+      $label = $v[0];
+      $title = $v[1];
+      $url = rawurlencode($label);
+      if ($label == $sort)
 	$checked = "checked=\"checked\"";
       else
 	$checked = "";
-      $sort_menu .= "<input OnChange=\"ganglia_submit();\" type=\"radio\" id=\"radio-" .str_replace(" ", "_", $v) . "\" name=\"s\" value=\"$v\" $checked/><label for=\"radio-" . str_replace(" ", "_", $v) . "\">$v</label>";
+      $sort_menu .= "<input OnChange=\"ganglia_submit();\" type=\"radio\" id=\"radio-" . str_replace(" ", "_", $label) . "\" name=\"s\" value=\"$label\" $checked/><label title=\"$title\" for=\"radio-" . str_replace(" ", "_", $label) . "\">$label</label>";
     }
+    $sort_menu .= "</div>";
   }
   return $sort_menu;
 }
@@ -89,22 +82,23 @@ function make_range_menu($physical, $jobrange, $cs, $ce, $range) {
   global $conf;
 
   $range_menu = "";
-  if (!$physical) {
-    $context_ranges = array_keys($conf['time_ranges']);
-    if ($jobrange)
-      $context_ranges[] = "job";
-    if ($cs or $ce)
-      $context_ranges[] = "custom";
+  if ($physical)
+    return $range_menu;
 
-    $range_menu = "Last&nbsp;&nbsp;";
-    foreach ($context_ranges as $v) {
-      $url = rawurlencode($v);
-      if ($v == $range)
-	$checked = "checked=\"checked\"";
-      else
-	$checked = "";
-      $range_menu .= "<input OnChange=\"ganglia_form.submit();\" type=\"radio\" id=\"range-$v\" name=\"r\" value=\"$v\" $checked/><label for=\"range-$v\">$v</label>";
-    }
+  $context_ranges = array_keys($conf['time_ranges']);
+  if ($jobrange)
+    $context_ranges[] = "job";
+  if ($cs or $ce)
+    $context_ranges[] = "custom";
+
+  $range_menu = "Last&nbsp;&nbsp;";
+  foreach ($context_ranges as $v) {
+    $url = rawurlencode($v);
+    if ($v == $range)
+      $checked = "checked=\"checked\"";
+    else
+      $checked = "";
+    $range_menu .= "<input OnChange=\"ganglia_form.submit();\" type=\"radio\" id=\"range-$v\" name=\"r\" value=\"$v\" $checked/><label for=\"range-$v\">$v</label>";
   }
   return $range_menu;
 }
@@ -233,8 +227,6 @@ function make_node_menu($self,
 # RFM - These definitions are here to eliminate "undefined variable"
 # error messages in ssl_error_log.
 !isset($initgrid) and $initgrid = 0;
-!isset($metricname) and $metricname = "";
-!isset($context_metrics) and $context_metrics = "";
 
 if ($context == "control" && $controlroom < 0)
   $header = "header-nobanner";
@@ -320,7 +312,7 @@ else
 #
 $sort_url = rawurlencode($sort);
 
-$get_metric_string = "m=$metricname&amp;r=$range&amp;s=$sort_url&amp;hc=${conf['hostcols']}&amp;mc=${conf['metriccols']}";
+$get_metric_string = "m={$user['metricname']}&amp;r=$range&amp;s=$sort_url&amp;hc=${conf['hostcols']}&amp;mc=${conf['metriccols']}";
 if ($jobrange and $jobstart)
     $get_metric_string .= "&amp;jr=$jobrange&amp;js=$jobstart";
 if ($cs)
@@ -389,81 +381,31 @@ if (($context != 'views') && ($context != 'compare_hosts')) {
 }
 $data->assign("node_menu", $node_menu);
 
-//////////////////// Build the metric menu ////////////////////////////////////
-
-if (count($metrics)) {
-  foreach ($metrics as $firsthost => $bar) {
-      foreach ($metrics[$firsthost] as $m => $foo)
-        $context_metrics[$m] = $m;
-  }
-  foreach ($reports as $r => $foo)
-    $context_metrics[] = $r;
-}
-
 #
 # If there are graphs present, show ranges.
 #
 $range_menu = make_range_menu($physical, $jobrange, $cs, $ce, $range);
 $data->assign("range_menu", $range_menu);
 
-#
-# Only compute metric-picker options if we have some, and are in cluster context.
-#
-if (is_array($context_metrics) and $context == "cluster") {
-  $picker_metrics = array();
-
-  # Find all the optional reports
-  if ($handle = opendir($conf['gweb_root'] . '/graph.d')) {
-
-    // If we are using RRDtool reports can be json or PHP suffixes
-    if ( $conf['graph_engine'] == "rrdtool" )
-      $report_suffix = "php|json";
-    else
-      $report_suffix = "json";
-
-    while (false !== ($file = readdir($handle))) {
-      if ( preg_match("/(.*)(_report)\.(" . $report_suffix .")/", $file, $out) ) {
-        if ( ! in_array($out[1] . "_report", $context_metrics) )
-          $context_metrics[] = $out[1] . "_report";
-      }
-    }
-
-    closedir($handle);
-  }
-
-  sort($context_metrics);
-
-  foreach ($context_metrics as $key) {
-    $url = rawurlencode($key);
-    $picker_metrics[] = "<option value=\"$url\">$key</option>";
-  }
-
-  $data->assign("picker_metrics", join("", $picker_metrics));
-  $data->assign("is_metrics_picker_disabled", "");  
-} else {
-  // We have to disable the sort_menu if we are not in the cluster context
-  $data->assign("is_metrics_picker_disabled", '$("#sort_menu").toggle(); ');
-  $data->assign("picker_metrics", "" );
+if ($context == 'meta') {
+  $sort_menu = make_sort_menu($context, $sort);
+  $data->assign("sort_menu", $sort_menu );
 }
 
-#
-# Show sort order if there is more than one physical machine present.
-#
-$sort_menu = make_sort_menu($context, $sort);
-$data->assign("sort_menu", $sort_menu );
-   
 if ($context == "physical" or $context == "cluster" or $context == 'host') {
   $cols_menu = make_cols_menu();
   $size_menu = make_size_menu($clustergraphsize, $context);
 }
 
-if ($context == "host") {
-  $metric_cols_menu = make_metric_cols_menu();
-}
-
 $custom_time = "";
 
-if ( in_array($context , array ("meta", "cluster", "host", "views", "decompose_graph", "compare_hosts") ) ) {
+if (in_array($context, array ("meta", 
+			      "cluster", 
+			      "cluster-summary", 
+			      "host", 
+			      "views", 
+			      "decompose_graph", 
+			      "compare_hosts"))) {
    $examples = "Feb 27 2007 00:00, 2/27/2007, 27.2.2007, now -1 week,"
       . " -2 days, start + 1 hour, etc.";
    $custom_time = "or <span class=\"nobr\">from <input type=\"TEXT\" title=\"$examples\" NAME=\"cs\" ID=\"datepicker-cs\" SIZE=\"17\"";
@@ -484,43 +426,6 @@ if ( in_array($context , array ("meta", "cluster", "host", "views", "decompose_g
 }
  
 $data->assign("custom_time", $custom_time);
-
-/////////////////////////////////////////////////////////////////////////
-// Additional filter to add after the list of nodes. Only useful in
-// cluster_view
-/////////////////////////////////////////////////////////////////////////
-if ( $context == "cluster" ) {
-  if ( isset($user['host_regex']) && $user['host_regex'] != "" )
-    $set_host_regex_value="value='" . $user['host_regex'] . "'";
-  else
-    $set_host_regex_value="";
-
-  // In some clusters you may have thousands of hosts which may load
-  // for a long time. For those cases we have the ability to display
-  // only the max amount of graphs and put place holders for the rest ie.
-  // it will say only print host name without an image
-  $max_graphs_options = array(1000,500,200,100,50,25,20,15,10);
-
-  if ( isset($user['max_graphs']) && is_numeric($user['max_graphs']) )
-    $max_graphs = $user['max_graphs'];
-  else
-    $max_graphs = $conf['max_graphs'];
-  
-  $max_graphs_values = "<option value=0>all</option>";
-  foreach ( $max_graphs_options as $key => $value ) {
-      if ( $max_graphs == $value )
-$max_graphs_values .= "<option selected>" . $value . "</option>";
-      else
-$max_graphs_values .= "<option>" . $value . "</option>";
-
-  }
-
-  $data->assign("additional_filter_options", 'Show only nodes matching <input name=host_regex ' .$set_host_regex_value . '>'
-   . '<input class="header_btn" type="SUBMIT" VALUE="Filter">'
-   . '&nbsp;<span class="nobr">Max graphs to show <select onChange="ganglia_submit();" name="max_graphs">' . $max_graphs_values . '</select></span>'
-    );
-} else
-  $data->assign("additional_filter_options", '');
 
 if($conf['auth_system'] == 'enabled') {
   $data->assign('auth_system_enabled', true);
@@ -557,6 +462,9 @@ header ("Pragma: no-cache"); # HTTP/1.0
 
 if (file_exists("./templates/${conf['template_name']}/user_header.tpl"))
   $data->assign('user_header', "1");
+
+$data->assign('context', $context);
+$data->assign("metric_name","{$user['metricname']}");
 
 $dwoo->output($tpl, $data);
 

@@ -5,16 +5,6 @@ $(function(){
     window.name = d.getTime();
   }
 
-  var range_menu = $("#range_menu");
-  if (range_menu[0])
-    range_menu.buttonset();
-  var custom_range_menu = $("#custom_range_menu");
-  if (custom_range_menu[0])
-    custom_range_menu.buttonset();
-  var sort_menu = $("#sort_menu");
-  if (sort_menu[0])
-    sort_menu.buttonset();
-
   var metric_search_input = jQuery('#metric-search input[name="q"]');
   if (metric_search_input[0])
     metric_search_input.liveSearch({url: 'search.php?q=', typeDelay: 500});
@@ -55,48 +45,10 @@ $(function(){
 	  buttonImageOnly: true,
 	  hideNowButton: true
     });
-
-  var create_new_view_dialog = $( "#create-new-view-dialog" );
-  if (create_new_view_dialog[0])
-    create_new_view_dialog.dialog({
-      autoOpen: false,
-      height: 200,
-      width: 350,
-      modal: true,
-      close: function() {
-        $("#create-new-view-layer").toggle();
-        $("#create-new-view-confirmation-layer").html("");
-        $.get('views_view.php?views_menu=1',
-              function(data) {
-	        $("#views_menu").html(data);
-              });
-      }
-    });
-
-  initMetricActionsDialog();	
   });
 
 function selectTab(tab_index) {
   $("#tabs").tabs("select", tab_index);
-}
-
-function viewId(view_name) {
-  return "v_" + view_name.replace(/[^a-zA-Z0-9_]/g, "_");
-}
-
-function selectView(view_name) {
-  $.cookie('ganglia-selected-view-' + window.name, view_name);
-  $("#vn").val(view_name);
-  ganglia_form.submit();
-}
-
-function createView() {
-  $("#create-new-view-confirmation-layer").html('<img src="img/spinner.gif">');
-  $.get('views_view.php', $("#create_view_form").serialize() , function(data) {
-    $("#create-new-view-layer").toggle();
-    $("#create-new-view-confirmation-layer").html(data);
-  });
-  return false;
 }
 
 function addItemToView() {
@@ -109,19 +61,21 @@ function addItemToView() {
 function initMetricActionsDialog() {
   var metric_actions_dialog = $("#metric-actions-dialog");
   if (metric_actions_dialog[0]) 
-    metric_actions_dialog.dialog({
-      autoOpen: false,
-      height: 250,
-      width: 450,
-      modal: true
-    });
+    metric_actions_dialog.dialog({autoOpen: false,
+		                  width: "auto",
+		                  modal: true,
+		                  position: { my: "top",
+		                              at: "top+200",
+                                              of: window}});
 }
 
-function metricActions(host_name,metric_name,type,graphargs) {
-    $( "#metric-actions-dialog" ).dialog( "open" );
+function metricActions(host_name, metric_name, type, graphargs) {
+    $("#metric-actions-dialog").dialog("open");
     $("#metric-actions-dialog-content").html('<img src="img/spinner.gif">');
     $.get('actions.php',
-          "action=show_views&host_name=" + host_name + "&metric_name=" + metric_name + "&type=" + type + graphargs, 
+          "action=show_views&host_name=" + host_name + 
+	  "&metric_name=" + metric_name + 
+	  "&type=" + type + graphargs, 
           function(data) {$("#metric-actions-dialog-content").html(data);});
     return false;
 }
@@ -169,12 +123,10 @@ function inspectGraph(graphArgs) {
   $("#popup-dialog").bind("dialogbeforeclose", 
                                   function(event, ui) {
                                     $("#enlargeTooltip").remove();});
-//  $('#popup-dialog-content').html('<img src="graph.php?' + graphArgs + '" />');
   $.get('inspect_graph.php',
         "flot=1&" + graphArgs, 
-        function(data) {$('#popup-dialog-content').html(data);})
+        function(data) {$('#popup-dialog-content').html(data);});
 }
-
 
 /* ----------------------------------------------------------------------------
   Draw a trend line on a graph.
@@ -199,13 +151,13 @@ var GRAPH_BASE_ID = "graph_img_";
 function initShowEvent() {
   $("[id^=" + SHOW_EVENTS_BASE_ID + "]").each(function() {
     $(this).button();
-    $(this).attr("checked", 'checked');
+    $(this).prop("checked", true);
     $(this).button('refresh');
   });
 
   if ($("#show_all_events").length > 0) {
     $("#show_all_events").button();
-    $("#show_all_events").attr("checked", 'checked');
+    $("#show_all_events").prop("checked", true);
     $("#show_all_events").button('refresh');
   }
 }
@@ -216,23 +168,20 @@ var TIME_SHIFT_BASE_ID_LEN = TIME_SHIFT_BASE_ID.length;
 function initTimeShift() {
   $("[id^=" + TIME_SHIFT_BASE_ID + "]").each(function() {
     $(this).button();
-    $(this).removeAttr("checked");
+    $(this).prop("checked", false);
     $(this).button('refresh');
   });
     
   if ($("#timeshift_overlay").length > 0) {
     $("#timeshift_overlay").button();
-    $("#timeshift_overlay").removeAttr("checked");
+    $("#timeshift_overlay").prop("checked", false);
     $("#timeshift_overlay").button('refresh');
   }
 }
 
 function showTimeshiftOverlay(show) {
   $("[id^=" + TIME_SHIFT_BASE_ID + "]").each(function() {
-      if (show)
-        $(this).attr("checked", 'checked');
-      else
-        $(this).removeAttr("checked");
+      $(this).prop('checked', show);
       $(this).button('refresh');
       var graphId = GRAPH_BASE_ID + 
 	$(this).attr('id').slice(TIME_SHIFT_BASE_ID_LEN);
@@ -242,10 +191,7 @@ function showTimeshiftOverlay(show) {
 
 function showAllEvents(show) {
   $("[id^=" + SHOW_EVENTS_BASE_ID + "]").each(function() {
-      if (show)
-        $(this).attr("checked", 'checked');
-      else
-        $(this).removeAttr("checked");
+      $(this).prop('checked', show);
       $(this).button('refresh');
       var graphId = GRAPH_BASE_ID + 
 	$(this).attr('id').slice(SHOW_EVENTS_BASE_ID_LEN);

@@ -20,7 +20,52 @@ if ($refresh) {
       "<br><br>The compile directory should be owned and writable by the apache user.</H4>";
     exit;
   }
- }
+}
+
+function get_picker_metrics($metrics, $reports, $gweb_root, $graph_engine) {
+  $context_metrics = "";
+  if (count($metrics)) {
+    foreach ($metrics as $host_metrics) {
+      foreach ($host_metrics as $metric_name => $metric_value) {
+	$context_metrics[$metric_name] = rawurldecode($metric_name);
+      }
+    }
+    foreach ($reports as $report_name => $report_value)
+      $context_metrics[] = $report_name;
+  }
+
+  if (!is_array($context_metrics))
+    return NULL;
+
+  $picker_metrics = array();
+
+  // Find all the optional reports
+  if ($handle = opendir($gweb_root . '/graph.d')) {
+    // If we are using RRDtool reports can be json or PHP suffixes
+    if ( $graph_engine == "rrdtool" )
+      $report_suffix = "php|json";
+    else
+      $report_suffix = "json";
+    
+    while (false !== ($file = readdir($handle))) {
+      if (preg_match("/(.*)(_report)\.(" . $report_suffix .")/", 
+		     $file, 
+		     $out)) {
+        if (!in_array($out[1] . "_report", $context_metrics))
+          $context_metrics[] = $out[1] . "_report";
+      }
+    }
+    closedir($handle);
+  }
+
+  sort($context_metrics);
+
+  foreach ($context_metrics as $metric) {
+    $url = rawurlencode($metric);
+    $picker_metrics[] = "<option value=\"$url\">$metric</option>";
+  }
+  return $picker_metrics;
+}
 
 function get_load($host, $metrics) {
   if (isset($metrics[$host]["cpu_num"]['VAL']) and 
@@ -48,7 +93,7 @@ function get_load_pie($showhosts,
 		      $cluster,
 		      $name,
 		      $data) {
-  if ($showhosts) {
+  if ($showhosts != 0) {
     $percent_hosts = array();
     foreach ($hosts_up as $host => $val) {
       // If host_regex is defined
@@ -97,8 +142,8 @@ function get_load_pie($showhosts,
   }
 }
 
-function get_host_metric_graphs($showhosts, 
-                                $hosts_up, 
+function get_host_metric_graphs($showhosts,
+				$hosts_up, 
                                 $hosts_down, 
                                 $user, 
                                 $conf,
@@ -112,38 +157,42 @@ function get_host_metric_graphs($showhosts,
                                 $reports_metricname,
                                 $clustergraphsize,
                                 $range,
+				$start,
+				$end,
                                 $cs,
                                 $ce,
                                 $vlabel,
 			        $data) {
   $sorted_hosts = array();
   $down_hosts = array();
-  if ($showhosts) {
-    foreach ($hosts_up as $host => $val) {
-      // If host_regex is defined
-      if (isset($user['host_regex']) && 
-          ! preg_match("/" .$user['host_regex'] . "/", $host))
-        continue;
-      
-      $load = get_load($host, $metrics);
-      $host_load[$host] = $load;
 
-      if ($metricname == "load_one")
-        $sorted_hosts[$host] = $load;
-      else if (isset($metrics[$host][$metricname]))
-        $sorted_hosts[$host] = $metrics[$host][$metricname]['VAL'];
-      else
-        $sorted_hosts[$host] = "";
-    } // foreach hosts_up
+  if ($showhosts == 0)
+    return;
+
+  foreach ($hosts_up as $host => $val) {
+    // If host_regex is defined
+    if (isset($user['host_regex']) && 
+	! preg_match("/" .$user['host_regex'] . "/", $host))
+      continue;
+
+    $load = get_load($host, $metrics);
+    $host_load[$host] = $load;
+
+    if ($metricname == "load_one")
+      $sorted_hosts[$host] = $load;
+    else if (isset($metrics[$host][$metricname]))
+      $sorted_hosts[$host] = $metrics[$host][$metricname]['VAL'];
+    else
+      $sorted_hosts[$host] = "";
+  } // foreach hosts_up
          
-    foreach ($hosts_down as $host => $val) {
-      $down_hosts[$host] = -1.0;
-    }
-
-    $data->assign("node_legend", 1);
+  foreach ($hosts_down as $host => $val) {
+    $down_hosts[$host] = -1.0;
   }
 
-  if (!is_array($hosts_up) or !$showhosts)
+  $data->assign("node_legend", 1);
+
+  if (!is_array($hosts_up))
     return;
 
   switch ($sort) {
@@ -170,8 +219,24 @@ function get_host_metric_graphs($showhosts,
   // metric. The $start,$end variables comes from get_context.php, 
   // included in index.php.
   // Do this only if person has not selected a maximum set of graphs to display
-  if ($max_graphs == 0 && $showhosts == 2 )
-    list($min, $max) = find_limits($sorted_hosts, $metricname);
+  if ($max_graphs == 0 && $showhosts == 1) {
+    $cs = $user['cs'];
+    if ($cs and (is_numeric($cs) or strtotime($cs)))
+      $start = $cs;
+
+    $ce = $user['ce'];
+    if ($ce and (is_numeric($ce) or strtotime($ce)))
+      $end = $ce;
+
+    list($min, $max) = find_limits($clustername,
+				   $sorted_hosts, 
+				   $metricname,
+				   $start,
+				   $end,
+				   $metrics,
+				   $conf,
+				   $rrd_options);
+  }
 
   // Second pass to output the graphs or metrics.
   $i = 1;
@@ -244,9 +309,9 @@ function get_host_metric_graphs($showhosts,
     if ($ce)
       $graphargs .= "&amp;ce=" . rawurlencode($ce);
     
-    // If we want scaling to be the same in clusterview we need to set $max and $min
-    // values
-    if ($showhosts == 2 && $max_graphs == 0 )
+    // If we want scaling to be the same in clusterview we need to set 
+    // $max and $min values
+    if ($showhosts == 1 && $max_graphs == 0 )
       $graphargs .= "&amp;x=$max&amp;n=$min";
     
     if (isset($vlabel))
@@ -352,10 +417,11 @@ function get_cluster_overview($showhosts,
   $avg_cpu_num = find_avg($clustername, "", "cpu_num");
   if ($avg_cpu_num == 0) 
     $avg_cpu_num = 1;
-  $cluster_util = sprintf("%.0f", 
-	  		  ((double) find_avg($clustername, 
-                                             "",
-					     "load_one") / $avg_cpu_num ) * 100);
+  $cluster_util = 
+    sprintf("%.0f", 
+	    ((double) find_avg($clustername, 
+			       "",
+			       "load_one") / $avg_cpu_num ) * 100);
   $data->assign("cluster_util", "$cluster_util%");
   $data->assign("range", $range);
 }
@@ -376,14 +442,16 @@ function get_cluster_optional_reports($conf,
   if (isset($conf['zoom_support']) && $conf['zoom_support'] === true)
     $additional_cluster_img_html_args = "class=cluster_zoomable";
 
-  $data->assign("additional_cluster_img_html_args", $additional_cluster_img_html_args);
+  $data->assign("additional_cluster_img_html_args", 
+		$additional_cluster_img_html_args);
 
 ###############################################################################
 # Let's find out what optional reports are included
 # First we find out what the default (site-wide) reports are then look
 # for host specific included or excluded reports
 ###############################################################################
-  $default_reports = array("included_reports" => array(), "excluded_reports" => array());
+  $default_reports = array("included_reports" => array(), 
+			   "excluded_reports" => array());
  if (is_file($conf['conf_dir'] . "/default.json")) {
    $default_reports = array_merge(
      $default_reports,
@@ -395,17 +463,21 @@ function get_cluster_optional_reports($conf,
    str_replace(" ", "_", $clustername) . 
    ".json";
 
- $override_reports = array("included_reports" => array(), "excluded_reports" => array());
+ $override_reports = array("included_reports" => array(), 
+			   "excluded_reports" => array());
  if (is_file($cluster_file)) {
-   $override_reports = array_merge($override_reports, 
-				   json_decode(file_get_contents($cluster_file), TRUE));
+   $override_reports = 
+     array_merge($override_reports, 
+		 json_decode(file_get_contents($cluster_file), TRUE));
  }
 
 # Merge arrays
  $reports["included_reports"] = 
-   array_merge($default_reports["included_reports"],$override_reports["included_reports"]);
+   array_merge($default_reports["included_reports"],
+	       $override_reports["included_reports"]);
  $reports["excluded_reports"] = 
-   array_merge($default_reports["excluded_reports"],$override_reports["excluded_reports"]);
+   array_merge($default_reports["excluded_reports"],
+	       $override_reports["excluded_reports"]);
 
 # Remove duplicates
  $reports["included_reports"] = array_unique($reports["included_reports"]);
@@ -434,11 +506,11 @@ function get_cluster_optional_reports($conf,
  $data->assign('optional_graphs_data', $optional_graphs_data);
 }
 
-function get_load_heatmap($hosts_up, $user, $metrics, $data) {
+function get_load_heatmap($hosts_up, $host_regex, $metrics, $data) {
   foreach ($hosts_up as $host => $val) {
     // If host_regex is defined
-    if (isset($user['host_regex']) && 
-        ! preg_match("/" .$user['host_regex'] . "/", $host))
+    if (isset($host_regex) && 
+        ! preg_match("/" . $host_regex . "/", $host))
       continue;
     
     $load = get_load($host, $metrics);
@@ -446,31 +518,43 @@ function get_load_heatmap($hosts_up, $user, $metrics, $data) {
   }
 
   $num_hosts = count($host_load);
+  if ($num_hosts == 0)
+    return;
 
-  $matrix = ceil(sqrt($num_hosts));
+  $num_cols = ceil(sqrt($num_hosts));
 
-  $xindex = 0;
-  $yindex = 0;
-
-  foreach ($host_load as $key => $value) {
-    if ($xindex >= $matrix) {
-      $string_array[] = "[" . join(",", $matrix_array[$yindex]) . "]";
-      $yindex++;
-      $xindex = 0;
+  $col_index = 0;
+  $row_index = 0;
+  $heatmap = '[';
+  foreach ($host_load as $host => $load) {
+    if ($col_index == 0) {
+      if ($row_index > 0)
+	$heatmap .= ',';
+      $heatmap .= '[';
     }
     
-    $matrix_array[$yindex][$xindex] = $value;
-    $xindex++;
+    if ($col_index > 0)
+      $heatmap .= ',';
+
+    $heatmap .= "{host:\"$host\",load:$load}";
+
+    if ($col_index == $num_cols - 1) {
+      $heatmap .= ']';
+      $col_index = 0;
+      $row_index++;
+    } else
+      $col_index++;
   }
 
-  $string_array[] = "[" . join(",", $matrix_array[$yindex]) . "]";
+  if ($col_index != 0) {
+    for ($i = 0; $i < ($num_cols * $num_cols - $num_hosts); $i++) {
+      $heatmap .= ",{host:\"unused\",load:0}";
+    }
+    $heatmap .= ']';
+  }
+  $heatmap .= ']';
 
-  $conf['heatmap_size'] = 200;
-
-  $heatmap = join(",", $string_array);
-
-  $data->assign("heatmap", $heatmap);
-  $data->assign("heatmap_size", floor($conf['heatmap_size'] / $matrix));
+  $data->assign("heatmap_data", $heatmap);
 }
 
 $fn = "cluster_" . ($refresh ? "refresh" : "view") . ".tpl";
@@ -503,6 +587,21 @@ get_cluster_overview($showhosts,
 		     $clustername, 
 		     $data);
 
+$user_metricname = $user['metricname'];
+if (!$showhosts) {
+  if (array_key_exists($user_metricname, $metrics))
+    $units = $metrics[$user_metricname]['UNITS'];
+} else {
+  if (array_key_exists($user_metricname, $metrics[key($metrics)]))
+    if (isset($metrics[key($metrics)][$user_metricname]['UNITS']))
+      $units = $metrics[key($metrics)][$user_metricname]['UNITS'];
+    else
+      $units = '';
+}
+
+if (isset($units))
+  $vlabel = $units;
+
 if (! $refresh) {
   get_cluster_optional_reports($conf, 
 			       $clustername, 
@@ -510,41 +609,27 @@ if (! $refresh) {
 			       $cluster[LOCALTIME],
 			       $data);
   
-  ///////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
   // Begin Host Display Controller
-  ///////////////////////////////////////////////////////////////////////////////
-  
-  // Correct handling of *_report metrics
-  
-  if (!$showhosts) {
-    if (array_key_exists($metricname, $metrics))
-      $units = $metrics[$metricname]['UNITS'];
-  } else {
-    if (array_key_exists($metricname, $metrics[key($metrics)]))
-      if (isset($metrics[key($metrics)][$metricname]['UNITS']))
-	$units = $metrics[key($metrics)][$metricname]['UNITS'];
-      else
-        $units = '';
-  }
+  //////////////////////////////////////////////////////////////////////////////
   
   // Correctly handle *_report cases and blank (" ") units
   
   if (isset($units)) {
-    $vlabel = $units;
     if ($units == " ")
       $units = "";
     else
-      $units=$units ? "($units)" : "";
+      $units = $units ? "($units)" : "";
   } else {
     $units = "";
   }
-  $data->assign("metric","$metricname $units");
-  $data->assign("metric_name","$metricname");
+  $data->assign("metric","{$user['metricname']} $units");
+  $data->assign("metric_name","{$user['metricname']}");
   $data->assign("sort", $sort);
   $data->assign("range", $range);
   
-  $showhosts_levels = array(2 => array('checked'=>'', 'name'=>'Auto'),
-			    1 => array('checked'=>'', 'name'=>'Same'),
+  $showhosts_levels = array(1 => array('checked'=>'', 'name'=>'Auto'),
+			    2 => array('checked'=>'', 'name'=>'Same'),
 			    0 => array('checked'=>'', 'name'=>'None'),
 			    );
   $showhosts_levels[$showhosts]['checked'] = 'checked';
@@ -555,12 +640,52 @@ if (! $refresh) {
     $data->assign("cols_menu", $cols_menu);
     $data->assign("size_menu", $size_menu);
   }
-  ///////////////////////////////////////////////////////////////////////////////
+
+  if (isset($user['host_regex']) && $user['host_regex'] != "")
+    $set_host_regex_value = "value='" . htmlentities($user['host_regex'], ENT_QUOTES) . "'";
+  else
+    $set_host_regex_value = "";
+
+  // In some clusters you may have thousands of hosts which may load
+  // for a long time. For those cases we have the ability to display
+  // only the max amount of graphs and put place holders for the rest ie.
+  // it will say only print host name without an image
+  $max_graphs_options = array(1000,500,200,100,50,25,20,15,10);
+
+  if (isset($user['max_graphs']) && is_numeric($user['max_graphs']))
+    $max_graphs = $user['max_graphs'];
+  else
+    $max_graphs = $conf['max_graphs'];
+  
+  $max_graphs_values = "<option value=0>all</option>";
+  foreach ($max_graphs_options as $value) {
+    if ($max_graphs == $value)
+      $max_graphs_values .= "<option selected>" . $value . "</option>";
+    else
+      $max_graphs_values .= "<option>" . $value . "</option>";
+  }
+
+  $data->assign("additional_filter_options", "");
+  if ($showhosts) {
+    $data->assign("additional_filter_options", 
+		  'Show only nodes matching <input name=host_regex ' . 
+		  $set_host_regex_value . '>' . 
+		  '<input class="header_btn" type="SUBMIT" VALUE="Filter">' .
+		  '<div style="display:inline;padding-left:10px;" class="nobr">Max graphs to show <select onChange="ganglia_submit();" name="max_graphs">' . 
+		  $max_graphs_values . 
+		  '</select></div>' .
+		  '<div style="display:inline;padding-left:10px;" class="nobr">' .
+		  make_sort_menu($context, $sort) .
+		  '</div>');
+  } 
+
+  //////////////////////////////////////////////////////////////////////////////
   // End Host Display Controller
-  ///////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
  }
 
-if (!(isset($conf['heatmaps_enabled']) and $conf['heatmaps_enabled'] == 1))
+if ((count($hosts_up) == 0) ||
+    !(isset($conf['heatmaps_enabled']) and $conf['heatmaps_enabled'] == 1))
   get_load_pie($showhosts, 
 	       $hosts_up, 
 	       $hosts_down, 
@@ -571,49 +696,67 @@ if (!(isset($conf['heatmaps_enabled']) and $conf['heatmaps_enabled'] == 1))
 	       $name,
 	       $data);
 
-get_host_metric_graphs($showhosts, 
-                       $hosts_up, 
-                       $hosts_down, 
-                       $user, 
-                       $conf,
-                       $metrics, 
-                       $metricname,
-                       $sort,
-                       $clustername,
-                       $get_metric_string,
-                       $cluster,
-                       $always_timestamp,
-                       $reports[$metricname],
-                       $clustergraphsize,
-                       $range,
-                       $cs,
-                       $ce,
-                       $vlabel,
-		       $data);
+if ($showhosts != 0)
+  get_host_metric_graphs($showhosts,
+			 $hosts_up, 
+			 $hosts_down, 
+			 $user, 
+			 $conf,
+			 $metrics, 
+			 $user['metricname'],
+			 $sort,
+			 $clustername,
+			 $get_metric_string,
+			 $cluster,
+			 $always_timestamp,
+			 $reports[$user['metricname']],
+			 $clustergraphsize,
+			 $range,
+			 $start,
+			 $end,
+			 $cs,
+			 $ce,
+			 $vlabel,
+			 $data);
 
-// No reason to go on if we have no up hosts.
+///////////////////////////////////////////////////////////////////////////////
+// Creates a heatmap
+///////////////////////////////////////////////////////////////////////////////
+if (isset($conf['heatmaps_enabled']) and 
+    $conf['heatmaps_enabled'] == 1 and
+    (count($hosts_up) > 0))
+  get_load_heatmap($hosts_up, $user['host_regex'], $metrics, $data);
+
+$data->assign("showhosts", $showhosts);
+
+// No reason to go on if we are not displaying individual hosts
 if (!is_array($hosts_up) or !$showhosts) {
   $dwoo->output($tpl, $data);
   return;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// Creates a heatmap
-///////////////////////////////////////////////////////////////////////////////
-if (isset($conf['heatmaps_enabled']) and $conf['heatmaps_enabled'] == 1)
-  get_load_heatmap($hosts_up, $user, $metrics, $data);
-
-///////////////////////////////////////////////////////////////////////////////
 // Show stacked graphs
 ///////////////////////////////////////////////////////////////////////////////
 if (isset($conf['show_stacked_graphs']) and 
     $conf['show_stacked_graphs'] == 1  and 
-    ! preg_match("/_report$/", $metricname)) {
+    ! preg_match("/_report$/", $user['metricname'])) {
   $cluster_url = rawurlencode($clustername);
-  $stacked_args = "m=$metricname&amp;c=$cluster_url&amp;r=$range&amp;st=$cluster[LOCALTIME]";
+  $stacked_args = "m={$user['metricname']}&amp;c=$cluster_url&amp;r=$range&amp;st=$cluster[LOCALTIME]";
   if (isset($user['host_regex']))
     $stacked_args .= "&amp;host_regex=" . $user['host_regex'];
   $data->assign("stacked_graph_args", $stacked_args);
+}
+
+if ($conf['picker_autocomplete'] == true) {
+  $data->assign('picker_autocomplete', true);
+} else {
+  $picker_metrics = get_picker_metrics($metrics, 
+				       $reports,
+				       $conf['gweb_root'], 
+				       $conf['graph_engine']);
+  if ($picker_metrics != NULL)
+    $data->assign("picker_metrics", join("", $picker_metrics));
 }
 
 $dwoo->output($tpl, $data);

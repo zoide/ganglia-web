@@ -1,6 +1,20 @@
 <?php
 include_once("./global.php");
 
+function make_metric_cols_menu($conf_metriccols) {
+  $metric_cols_menu = 
+    "<select name=\"mc\" OnChange=\"ganglia_form.submit();\">\n";
+
+  foreach (range(1,25) as $metric_cols) {
+    $metric_cols_menu .= "<option value=$metric_cols ";
+    if ($metric_cols == $conf_metriccols)
+      $metric_cols_menu .= "selected";
+    $metric_cols_menu .= ">$metric_cols\n";
+  }
+  $metric_cols_menu .= "</select>\n";
+  return $metric_cols_menu;
+}
+
 $tpl = new Dwoo_Template_File( template("host_view.tpl") );
 $data = new Dwoo_Data();
 
@@ -62,10 +76,13 @@ function getOptionalReports($hostname,
 
   $cluster_override_reports = array("included_reports" => array(),
 				    "excluded_reports" => array());
-  if (is_file($cluster_file)) {
-    $cluster_override_reports = array_merge(
-      $cluster_override_reports,
-      json_decode(file_get_contents($cluster_file), TRUE));
+
+  if ($conf['optional_cluster_graphs_for_host_view']) {
+    if (is_file($cluster_file)) {
+      $cluster_override_reports = array_merge(
+        $cluster_override_reports,
+        json_decode(file_get_contents($cluster_file), TRUE));
+    } 
   } 
 
   $host_file = $conf['conf_dir'] . "/host_" . $hostname . ".json";
@@ -206,7 +223,14 @@ function getMetricGroups($metrics,
       if (($visible && ($open_groups[0] == "NOGROUPS")) ||
 	  (!$visible && ($open_groups[0] == "ALLGROUPS")))
 	$new_open_groups .= "_|_" . $group;
-      
+ 
+      if (function_exists("sort_metric_group_metrics")) {
+	$metric_array = sort_metric_group_metrics($group, $metric_array);
+      } else {
+	// Sort by metric_name
+	asort($metric_array);
+      }
+
       $i = 0;
       foreach ($metric_array as $name) {
 	$metrics_group_data[$group]["metrics"][$name]["graphargs"] = $metricMap[$name]['graph'];
@@ -251,7 +275,7 @@ if ($hosts_down) {
 }
 
 $data->assign('columns_dropdown', 1);
-$data->assign("metric_cols_menu", $metric_cols_menu);
+$data->assign("metric_cols_menu", make_metric_cols_menu($conf['metriccols']));
 $data->assign("size_menu", $size_menu);
 
 $size = isset($clustergraphsize) ? $clustergraphsize : 'default';

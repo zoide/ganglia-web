@@ -52,6 +52,11 @@ function getMetricGroup($metrics,
 
   //dump_var($metricMap, "metricMap");
   //dump_var($metricGroupMap, "metricGroupMap");
+  
+  # There is a special case where if you don't set group when you do gmetric
+  # invocation it gets set to no_group which ends up being just [""] array
+  if ( $metric_group == "no_group" ) 
+    $metric_group = "";
 
   if (!isset($metricGroupMap[$metric_group])) {
     error_log("Missing metric group: " . $metric_group);
@@ -61,9 +66,14 @@ function getMetricGroup($metrics,
   $metric_array = $metricGroupMap[$metric_group];
   $num_metrics = count($metric_array);
 
+  if (function_exists("sort_metric_group_metrics")) {
+    $metric_array = sort_metric_group_metrics($group, $metric_array);
+  } else {
+    // Sort by metric_name
+    asort($metric_array);
+  }
+
   $i = 0;
-  # Sort by metric_name
-  asort($metric_array);  
   foreach ($metric_array as $name) {
     $group["metrics"][$name]["graphargs"] = $metricMap[$name]['graph'];
     $group["metrics"][$name]["alt"] = "$hostname $name";

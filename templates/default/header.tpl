@@ -8,10 +8,13 @@
 <link type="text/css" href="css/jquery.liveSearch.css" rel="stylesheet" />
 <link type="text/css" href="css/jquery.multiselect.css" rel="stylesheet" />
 <link type="text/css" href="css/jquery.flot.events.css" rel="stylesheet" />
+<link type="text/css" href="css/fullcalendar.css" rel="stylesheet" />
+<link type="text/css" href="css/qtip.min.css" rel="stylesheet" />
+<link type="text/css" href="css/chosen.min.css" rel="stylesheet" />
 <link type="text/css" href="./styles.css" rel="stylesheet" />
 <script type="text/javascript" src="js/jquery-1.9.1.min.js"></script>
 <script>$.uiBackCompat = false;</script>
-<script type="text/javascript" src="js/jquery-ui-1.10.2.custom.min.js"></script>
+<script type="text/javascript" src="js/jquery-ui.min.js"></script>
 <script type="text/javascript" src="js/jquery.livesearch.min.js"></script>
 <script type="text/javascript" src="js/ganglia.js"></script>
 <script type="text/javascript" src="js/jquery.gangZoom.js"></script>
@@ -19,18 +22,23 @@
 <script type="text/javascript" src="js/jquery-ui-timepicker-addon.js"></script>
 <script type="text/javascript" src="js/jquery.ba-bbq.min.js"></script>
 <script type="text/javascript" src="js/combobox.js"></script>
-<script type="text/javascript" src="js/jquery.scrollTo-1.4.2-min.js"></script>
+<script type="text/javascript" src="js/jquery.scrollTo-1.4.3.1-min.js"></script>
 <script type="text/javascript" src="js/jquery.buttonsetv.js"></script>
+<script type="text/javascript" src="js/fullcalendar.js"></script>
+<script type="text/javascript" src="js/jquery.qtip.min.js"></script>
+<script type="text/javascript" src="js/jquery.jstree.js"></script>
+<script type="text/javascript" src="js/chosen.jquery.min.js"></script>
 <script type="text/javascript">
     var server_utc_offset={$server_utc_offset};
     var g_refresh_timer = setTimeout("refresh()", {$refresh} * 1000);
 
     function refreshHeader() {
-      $.get('header.php?date_only=1', function(data) {
+      $.get('header.php?date_only=1', function(datetime) {
         var title = $("#page_title").text();
-        var l = title.lastIndexOf(" for ");
-        title = title.substring(0, l);
-        title += " for " + data;
+        var l = title.lastIndexOf(" at ");
+        if (l != -1)
+          title = title.substring(0, l);
+        title += " at " + datetime;
         $("#page_title").text(title);
         });
     }
@@ -69,6 +77,18 @@
     }
 
     $(function() {
+      var range_menu = $("#range_menu");
+      if (range_menu[0])
+        range_menu.buttonset();
+
+      var custom_range_menu = $("#custom_range_menu");
+      if (custom_range_menu[0])
+        custom_range_menu.buttonset();
+
+      var sort_menu = $("#sort_menu");
+      if (sort_menu[0])
+        sort_menu.buttonset();
+
       g_overlay_events = ($("#overlay_events").val() == "true");
 
       g_tabIndex = new Object();
@@ -120,35 +140,9 @@
       }
     });
 
-    $(function() {
-      {if $picker_autocomplete}
-      var cache = { }, lastXhr;
-      $("#metrics-picker").autocomplete({
-        minLength: 2,
-        source: function( request, response ) {
-          var term = request.term;
-          if ( term in cache ) {
-            response( cache[term] );
-            return;
-          }
-          lastXhr = $.getJSON("api/metrics_autocomplete.php", request, function( data, status, xhr ) {
-            cache[term] = data.message;
-            if ( xhr == lastXhr ) {
-              response(data.message);
-            }
-          });
-        }
-      });
-      {else}
-      $("#metrics-picker").combobox();
-      {/if}
-
-      {$is_metrics_picker_disabled}
-
-      $(".header_btn").button();
-    });
-
   $(function () {
+    $("#metrics-picker").val("{$metric_name}");
+    $(".header_btn").button();
 
     done = function done(startTime, endTime) {
             setStartAndEnd(startTime, endTime);
@@ -261,8 +255,8 @@
 
 <div id="tabs-main">
 <form action="{$page}" method="GET" name="ganglia_form">
-  <div style="background-color:#dddddd;padding:5px;">
-     <big style="float:left;"><b id="page_title">{$page_title} for {$date}</b></big><input style="float:right;" class="header_btn" type="submit" value="Get Fresh Data"/><div style="clear:both"></div>
+  <div style="padding:5px;background-color:#dddddd">
+     <big style="float:left;"><b id="page_title">{$page_title} at {$date}</b></big><input style="float:right;" class="header_btn" type="submit" value="Get Fresh Data"/><div style="clear:both"></div>
   </div>
   <div style="padding:5px 5px 0 5px;">
     <div style="float:left;" id="range_menu" class="nobr">{$range_menu}</div>
@@ -270,19 +264,19 @@
     <div style="float:right;">{$additional_buttons}&nbsp;&nbsp;{$alt_view}</div>
     <div style="clear:both;"></div>
   </div>
-  <div id="sort_menu" style="padding:5px 5px 0 5px;">
-   {if $picker_autocomplete}
-   Metric&nbsp;&nbsp; <input name="m" id="metrics-picker" />&nbsp;&nbsp;
-   {else}
-   Metric&nbsp;&nbsp; <select name="m" id="metrics-picker">{$picker_metrics}</select>&nbsp;&nbsp;
-   {/if}
-     {$sort_menu}
+  {if $context != "cluster" && $context != "cluster-summary"}
+  <input type="hidden" name="m" id="metrics-picker">
+  {/if}
+  {if $context == "meta"}
+  <div style="padding:5px 5px 0 5px;">
+    {$sort_menu}
   </div>
-{if $node_menu != ""}
-  <div id="sort_menu" style="padding:5px 5px 0 5px;">
+  {/if}
+  {if $node_menu != ""}
+  <div id="node_menu" style="padding:5px 5px 0 5px;">
     {$node_menu}&nbsp;&nbsp;{$additional_filter_options}
   </div>
-{/if}
+  {/if}
 
 <input type="hidden" name="tab" id="selected_tab" value="{$selected_tab}">
 <input type="hidden" id="vn" name="vn" value="{$view_name}">

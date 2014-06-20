@@ -215,81 +215,85 @@ function node_image ($metrics)
 # Finds the min/max over a set of metric graphs. Nodes is
 # an array keyed by host names.
 #
-function find_limits($nodes, $metricname)
-{
-   global $conf, $metrics, $clustername, $rrd_dir, $start, $end, $rrd_options;
+function find_limits($clustername, 
+		     $nodes, 
+		     $metricname, 
+		     $start, 
+		     $end, 
+		     $metrics,
+		     $conf,
+		     $rrd_options) {
+  if (!count($metrics))
+    return array(0, 0);
 
-   if (!count($metrics))
-      return array(0, 0);
-
-   $firsthost = key($metrics);
+  $firsthost = key($metrics);
    
-   if (array_key_exists($metricname,$metrics[$firsthost])) {
-     if ($metrics[$firsthost][$metricname]['TYPE'] == "string"
+  if (array_key_exists($metricname, $metrics[$firsthost])) {
+    if ($metrics[$firsthost][$metricname]['TYPE'] == "string"
         or $metrics[$firsthost][$metricname]['SLOPE'] == "zero")
-           return array(0,0);
-   }
-   else {
-     return array(0,0);
-   }
+      return array(0,0);
+  } else {
+    return array(0,0);
+  }
 
-   $max=0;
-   $min=0;
-   if ($conf['graph_engine'] == "graphite") {
-     $target = $conf['graphite_prefix'] . $clustername . ".[a-zA-Z0-9]*." . $metricname . ".sum";
-     $raw_highestMax = file_get_contents($conf['graphite_url_base'] . "?target=highestMax(" . $target . ",1)&from=" . $start . "&until=" . $end . "&format=json");
-     $highestMax = json_decode($raw_highestMax, TRUE);
-     $highestMaxDatapoints = $highestMax[0]['datapoints'];
-     $maxdatapoints = array();
-     foreach ( $highestMaxDatapoints as $datapoint ) {
-       array_push($maxdatapoints, $datapoint[0]);
-     }
-     $max = max($maxdatapoints);
-   }
-   else {
-     foreach ( $nodes as $host => $value ) {
-       $out = array();
+  $max = 0;
+  $min = 0;
+  if ($conf['graph_engine'] == "graphite") {
+    $target = $conf['graphite_prefix'] . 
+      $clustername . ".[a-zA-Z0-9]*." . $metricname . ".sum";
+    $raw_highestMax = file_get_contents($conf['graphite_url_base'] . "?target=highestMax(" . $target . ",1)&from=" . $start . "&until=" . $end . "&format=json");
+    $highestMax = json_decode($raw_highestMax, TRUE);
+    $highestMaxDatapoints = $highestMax[0]['datapoints'];
+    $maxdatapoints = array();
+    foreach ($highestMaxDatapoints as $datapoint) {
+      array_push($maxdatapoints, $datapoint[0]);
+    }
+    $max = max($maxdatapoints);
+  } else {
+    foreach (array_keys($nodes) as $host) {
+      $rrd_dir = "{$conf['rrds']}/$clustername/$host";
+      $rrd_file = "$rrd_dir/$metricname.rrd";
+      if (file_exists($rrd_file)) {
+	if (extension_loaded('rrd')) {
+	  $values = rrd_fetch($rrd_file,
+			      array("--start", $start,
+				    "--end", $end,
+				    "AVERAGE"));
 
-       $rrd_dir = "${conf['rrds']}/$clustername/$host";
-       $rrd_file = "$rrd_dir/$metricname.rrd";
-       if (file_exists($rrd_file)) {
-          if ( extension_loaded( 'rrd' ) ) {
-            $values = rrd_fetch($rrd_file,
-              array(
-                "--start", $start,
-                "--end", $end,
-                "AVERAGE"
-              )
-            );
+	  $values = (array_filter(array_values($values['data']['sum']),
+				  'is_finite'));
+	  $thismax = max($values);
+	  $thismin = min($values);
+	} else {
+	  $command = $conf['rrdtool'] . " graph /dev/null $rrd_options ".
+	    "--start '$start' --end '$end' ".
+	    "DEF:limits='$rrd_dir/$metricname.rrd':'sum':AVERAGE ".
+	    "PRINT:limits:MAX:%.2lf ".
+	    "PRINT:limits:MIN:%.2lf";
+	  $out = array();
+	  exec($command, $out);
+	  if (isset($out[1])) {
+	    $thismax = $out[1];
+	  } else {
+	    $thismax = NULL;
+	  }
+	  if (!is_numeric($thismax)) 
+	    continue;
+	  $thismin = $out[2];
+	  if (!is_numeric($thismin))
+	    continue;
+	}
 
-            $values = (array_filter(array_values($values['data']['sum']), 'is_finite'));
-            $thismax = max($values);
-            $thismin = min($values);
-          } else {
-            $command = $conf['rrdtool'] . " graph /dev/null $rrd_options ".
-               "--start $start --end $end ".
-               "DEF:limits='$rrd_dir/$metricname.rrd':'sum':AVERAGE ".
-               "PRINT:limits:MAX:%.2lf ".
-               "PRINT:limits:MIN:%.2lf";
-            exec($command, $out);
-            if(isset($out[1])) {
-               $thismax = $out[1];
-            } else {
-               $thismax = NULL;
-            }
-            if (!is_numeric($thismax)) continue;
-            $thismin=$out[2];
-            if (!is_numeric($thismin)) continue;
-          }
+	if ($max < $thismax) 
+	  $max = $thismax;
 
-          if ($max < $thismax) $max = $thismax;
-
-          if ($min > $thismin) $min = $thismin;
-          #echo "$host: $thismin - $thismax (now $value)<br>\n";
-       }
-     }
-   }
-   return array($min, $max);
+	if ($min > $thismin)
+	  $min = $thismin;
+	//echo "$host: $thismin - $thismax<br>\n";
+      }
+    }
+  }
+  return array($min, $max);
 }
 
 #------------------------------------------------------------------------------
@@ -559,6 +563,82 @@ function filter_permit($source_name)
    return isset($filter_permit_list[$source_name]);
 }
 
+$VIEW_NAME_SEP = '--';
+
+function viewName($view) {
+  global $VIEW_NAME_SEP;
+
+  $vn = '';
+  if ($view['parent'] != NULL)
+    $vn = str_replace('/', $VIEW_NAME_SEP, $view['parent']) . $VIEW_NAME_SEP;
+  $vn .= $view['view_name'];
+  return $vn;
+}
+
+class ViewList {
+  private $available_views;
+
+  public function __construct() {
+    $this->available_views = get_available_views();
+  }
+
+  public function viewExists($view_name) {
+    foreach ($this->available_views as $view) {
+      if ($view['view_name'] == $view_name) {
+	return TRUE;
+      }
+    }
+    return FALSE;
+  }
+
+  public function getView($view_name) {
+    foreach ($this->available_views as $view) {
+      if (viewName($view) == $view_name) {
+	return $view;
+      }
+    }
+    return NULL;
+  }
+
+  public function removeView($view_name) {
+    foreach ($this->available_views as $key => $view) {
+      if (viewName($view) == $view_name) {
+	unset($this->available_views[$key]);
+	return;
+      }
+    }
+  }
+
+  public function getViews() {
+    return $this->available_views;
+  }
+}
+
+function getViewItems($view, $range, $cs, $ce) {
+  $view_elements = get_view_graph_elements($view);
+  $view_items = array();
+  if (count($view_elements) != 0) {
+    $graphargs = "";
+    if ($cs)
+      $graphargs .= "&amp;cs=" . rawurlencode($cs);
+    if ($ce)
+      $graphargs .= "&amp;ce=" . rawurlencode($ce);
+    
+    foreach ($view_elements as $element) {
+      $canBeDecomposed = isset($element['aggregate_graph']) ||
+	((strpos($element['graph_args'], 'vn=') !== FALSE) &&
+	 (strpos($element['graph_args'], 'item_id=') !== FALSE));
+      $view_items[] = 
+	array("legend" => isset($element['hostname']) ? 
+	      $element['hostname'] : "Aggregate graph",
+	      "url_args" => htmlentities($element['graph_args']) . 
+	      "&amp;r=" . $range . $graphargs,
+	      "aggregate_graph" => isset($element['aggregate_graph']) ? 1 : 0,
+	      "canBeDecomposed" => $canBeDecomposed ? 1 : 0);
+    }
+  }
+  return $view_items;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Get all the available views
@@ -574,44 +654,43 @@ function get_available_views() {
   $available_views = array();
 
   if ($handle = opendir($conf['views_dir'])) {
-
-      while (false !== ($file = readdir($handle))) {
-
-	if ( preg_match("/^view_(.*)\.json$/", $file, $out) ) {
-	  $view_config_file = $conf['views_dir'] . "/" . $file;
-	  if ( ! is_file ($view_config_file) ) {
-	    echo("Can't read view config file " . $view_config_file . ". Please check permissions");
-	  }
-
-	  $view = json_decode(file_get_contents($view_config_file), TRUE);
-	  // Check whether view type has been specified ie. regex. 
-          // If not it's standard view
-	  $view_type = 
-            isset($view['view_type']) ? $view['view_type'] : "standard";
-          $default_size = isset($view['default_size']) ? 
-	    $view['default_size'] : $conf['default_view_graph_size'];
-	  $available_views[] = array ("file_name" => $view_config_file, 
-                                      "view_name" => $view['view_name'],
-                                      "default_size" => $default_size, 
-                                      "items" => $view['items'], 
-                                      "view_type" => $view_type);
-
-	  unset($view);
-
+    while (false !== ($file = readdir($handle))) {
+      if (preg_match("/^view_(.*)\.json$/", $file, $out)) {
+	$view_config_file = $conf['views_dir'] . "/" . $file;
+	if (!is_file ($view_config_file)) {
+	  echo("Can't read view config file " . 
+	       $view_config_file . ". Please check permissions");
 	}
+
+	$view = json_decode(file_get_contents($view_config_file), TRUE);
+	// Check whether view type has been specified ie. regex. 
+	// If not it's standard view
+	$view_type = 
+	  isset($view['view_type']) ? $view['view_type'] : "standard";
+	$default_size = isset($view['default_size']) ? 
+	  $view['default_size'] : $conf['default_view_graph_size'];
+	$view_parent = 
+	  isset($view['parent']) ? $view['parent'] : NULL;
+
+	$available_views[] = array ("file_name" => $view_config_file, 
+				    "view_name" => $view['view_name'],
+				    "default_size" => $default_size, 
+				    "items" => $view['items'], 
+				    "view_type" => $view_type,
+				    "parent" => $view_parent);
+	unset($view);
       }
-
-      closedir($handle);
+    }
+    closedir($handle);
   }
-
+  
   foreach ($available_views as $key => $row) {
-    $name[$key]  = strtolower($row['view_name']);
+    $name[$key] = strtolower($row['view_name']);
   }
-
-  @array_multisort($name,SORT_ASC, $available_views);
-
-  return $available_views;
-
+  
+  @array_multisort($name, SORT_ASC, $available_views);
+  
+  return $available_views; 
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -621,45 +700,41 @@ function get_available_views() {
 // It is up to the caller to add proper size information, time ranges etc.
 ///////////////////////////////////////////////////////////////////////////////
 function get_view_graph_elements($view) {
-
   global $conf, $index_array;
 
   retrieve_metrics_cache();
-
+  
   $view_elements = array();
 
   // set the default size from the view or global config
   if ( isset($conf['default_view_graph_size']) ) {
     $default_size = $conf['default_view_graph_size'];
   }
+
   if ( isset($view['default_size']) ) {
     $default_size = $view['default_size'];
   }
 
 
   switch ( $view['view_type'] ) {
-
-    case "standard":
+  case "standard":
     // Does view have any items/graphs defined
     if ( sizeof($view['items']) == 0 ) {
       continue;
       // print "No graphs defined for this view. Please add some";
     } else {
-
-
       // Loop through graph items
-      foreach ( $view['items'] as $item_id => $item ) {
-
+      foreach ($view['items'] as $item_id => $item) {
 	// Check if item is an aggregate graph
-	if ( isset($item['aggregate_graph']) ) {
-
+	if (isset($item['aggregate_graph'])) {
 	  foreach ( $item['host_regex'] as $reg_id => $regex_array ) {
 	    $graph_args_array[] = "hreg[]=" . urlencode($regex_array["regex"]);
 	  }
 
-	  if ( isset($item['metric_regex']) ) {
+	  if (isset($item['metric_regex'])) {
 	    foreach ( $item['metric_regex'] as $reg_id => $regex_array ) {
-	      $graph_args_array[] = "mreg[]=" . urlencode($regex_array["regex"]);
+	      $graph_args_array[] = 
+		"mreg[]=" . urlencode($regex_array["regex"]);
               $mreg[] = $regex_array["regex"];
 	    }
 	  }
@@ -669,62 +744,61 @@ function get_view_graph_elements($view) {
           } else {
             $graph_args_array[] = "z=" . $default_size;
           }
-
-
+	  
 	  // If graph type is not specified default to line graph
-	  if ( isset($item['graph_type']) && in_array($item['graph_type'], array('line', 'stack') ) )
+	  if (isset($item['graph_type']) && 
+	      in_array($item['graph_type'], array('line', 'stack')))
 	    $graph_args_array[] = "gtype=" . $item['graph_type'];
 	  else
 	    $graph_args_array[] = "gtype=line";
-
+	  
 	  if (isset($item['upper_limit']))
 	    $graph_args_array[] = "x=" .$item['upper_limit'];
-
+	  
 	  if (isset($item['lower_limit']))
 	    $graph_args_array[] = "n=" .$item['lower_limit'];
-
+	  
 	  if (isset($item['vertical_label']))
 	    $graph_args_array[] = "vl=" . urlencode($item['vertical_label']);
-
+	  
 	  if (isset($item['title']))
 	    $graph_args_array[] = "title=" . urlencode($item['title']);
 
-	  if ( isset($item['metric']) ) {
+	  if (isset($item['metric']))
 	    $graph_args_array[] = "m=" . $item['metric'];
-	  }
 
-          if ( isset($item['glegend']) )
+          if (isset($item['glegend']))
             $graph_args_array[] = "glegend=" . $item["glegend"];
 
-	  if ( isset($item['cluster']) ) {
+	  if (isset($item['cluster']))
 	    $graph_args_array[] = "c=" . urlencode($item['cluster']);
-	  }
 
-	  if ( isset($item['exclude_host_from_legend_label']) ) {
-	    $graph_args_array[] = "lgnd_xh=" . $item['exclude_host_from_legend_label'];
-	  }
+	  if (isset($item['exclude_host_from_legend_label']))
+	    $graph_args_array[] = 
+	      "lgnd_xh=" . $item['exclude_host_from_legend_label'];
 	  
 	  $graph_args_array[] = "aggregate=1";
-	  $view_elements[] = array ( "graph_args" => join("&", $graph_args_array), 
-	      "aggregate_graph" => 1,
-	      "name" => isset($item['title']) && $item['title'] != "" ? $item['title'] : $mreg[0] . " Aggregate graph"
-	  );
-
+	  $view_elements[] = 
+	    array("graph_args" => join("&", $graph_args_array), 
+		  "aggregate_graph" => 1,
+		  "name" => isset($item['title']) && $item['title'] != "" ? 
+		  $item['title'] : $mreg[0] . " Aggregate graph");
+	  
 	  unset($graph_args_array);
           
-        // Check whether it's a composite graph/report. It needs to have an item id
-	} else if ( $item['item_id'] ) {
-          
+	  // Check whether it's a composite graph/report. 
+	  // It needs to have an item id
+	} else if ($item['item_id']) {
 	  $graph_args_array[] = "vn=" . $view['view_name'];
           $graph_args_array[] = "item_id=" . $item['item_id'];
-	  $view_elements[] = array ( "graph_args" => join("&", $graph_args_array)
-	  );
+	  $view_elements[] = 
+	    array("graph_args" => join("&", $graph_args_array));
           unset($graph_args_array);
           
-	// It's standard metric graph          
+	  // It's standard metric graph          
         } else {
 	  // Is it a metric or a graph(report)
-	  if ( isset($item['metric']) ) {
+	  if (isset($item['metric'])) {
 	    $graph_args_array[] = "m=" . $item['metric'];
 	    $name = $item['metric'];
 	  } else {
@@ -741,28 +815,28 @@ function get_view_graph_elements($view) {
             $hostname = $item['hostname'];
             $cluster = array_key_exists($hostname, $index_array['cluster']) ?
 	      $index_array['cluster'][$hostname][0] : NULL;
-	      $graph_args_array[] = "h=" . urlencode($hostname);
+	    $graph_args_array[] = "h=" . urlencode($hostname);
           } else if (isset($item['cluster'])) {
 	    $hostname = "";
             $cluster = $item['cluster'];
-	    $graph_args_array[] = "c=" . urlencode($cluster);
 	  } else {
             $hostname = "";
             $cluster = "";
 	  }
+	  $graph_args_array[] = "c=" . urlencode($cluster);
 
           if (isset($item['upper_limit']))
             $graph_args_array[] = "x=" .$item['upper_limit'];
-
+	  
 	  if (isset($item['lower_limit']))
 	    $graph_args_array[] = "n=" .$item['lower_limit'];
-
+	  
 	  if (isset($item['vertical_label']))
 	    $graph_args_array[] = "vl=" . urlencode($item['vertical_label']);
-
+	  
 	  if (isset($item['title']))
 	    $graph_args_array[] = "title=" . urlencode($item['title']);
-
+	  
           if (isset($item['warning'])) {
             $view_e['warning'] = $item['warning'];
             $graph_args_array[] = "warn=" . $item['warning'];
@@ -772,66 +846,61 @@ function get_view_graph_elements($view) {
             $graph_args_array[] = "crit=" . $item['critical'];
           }
 
+          if (isset($item['alias'])) {
+	    $view_e['alias'] = $item['alias'];
+          }
 
           $view_e["graph_args"] = join("&", $graph_args_array);
           $view_e['hostname'] = $hostname;
           $view_e['cluster'] = $cluster;
           $view_e['name'] = $name;
-                  
+	  
 	  $view_elements[] = $view_e;
-
+	  
           unset($view_e);
 	  unset($graph_args_array);
-
 	}
-
       } // end of foreach ( $view['items']
     } // end of if ( sizeof($view['items'])
     break;
-    ;;
 
     ///////////////////////////////////////////////////////////////////////////
     // Currently only supports matching hosts.
     ///////////////////////////////////////////////////////////////////////////
-    case "regex":
-      foreach ( $view['items'] as $item_id => $item ) {
-	// Is it a metric or a graph(report)
-	if ( isset($item['metric']) ) {
-	  $metric_suffix = "m=" . $item['metric'];
-	  $name = $item['metric'];
-	} else {
-	  $metric_suffix = "g=" . $item['graph'];
-	  $name = $item['graph'];
-	}
-
-	// Find hosts matching a criteria
-	$query = $item['hostname'];
-	foreach ( $index_array['hosts'] as $key => $host_name ) {
-	  if ( preg_match("/$query/", $host_name ) ) {
-	    $clusters = $index_array['cluster'][$host_name];
-	    foreach ($clusters AS $cluster) {
+  case "regex":
+    foreach ($view['items'] as $item_id => $item) {
+      // Is it a metric or a graph(report)
+      if ( isset($item['metric']) ) {
+	$metric_suffix = "m=" . $item['metric'];
+	$name = $item['metric'];
+      } else {
+	$metric_suffix = "g=" . $item['graph'];
+	$name = $item['graph'];
+      }
+      
+      // Find hosts matching a criteria
+      $query = $item['hostname'];
+      foreach ( $index_array['hosts'] as $key => $host_name ) {
+	if (preg_match("/$query/", $host_name)) {
+	  $clusters = $index_array['cluster'][$host_name];
+	  foreach ($clusters AS $cluster) {
 	    $graph_args_array[] = "h=" . urlencode($host_name);
 	    $graph_args_array[] = "c=" . urlencode($cluster);
 
-	    $view_elements[] = array ( "graph_args" => $metric_suffix . "&" . join("&", $graph_args_array), 
-	      "hostname" => $host_name,
-	      "cluster" => $cluster,
-	      "name" => $name);
-
+	    $view_elements[] = 
+	      array("graph_args" => $metric_suffix . "&" . join("&", $graph_args_array), 
+		    "hostname" => $host_name,
+		    "cluster" => $cluster,
+		    "name" => $name);
+	    
 	    unset($graph_args_array);
-            }
-
 	  }
 	}
-	
-      } // end of foreach ( $view['items'] as $item_id => $item )
+      }
+    } // end of foreach ( $view['items'] as $item_id => $item )
     break;;
-  
   } // end of switch ( $view['view_type'] ) {
-
-
   return ($view_elements);
-
 }
 
 function legendEntry($vname, $legend_items) {
@@ -1059,32 +1128,33 @@ function build_aggregate_graph_config ($graph_type,
       if ( preg_match("/$query/i", $host_name ) ) {
         // We can have same hostname in multiple clusters
         foreach ($index_array['cluster'][$host_name] AS $cluster) {
-            $matches[] = $host_name . "|" . $cluster;
+            $host_matches[] = $host_name . "|" . $cluster;
         }
       }
     }
-  } 
+  }
+
+  sort($host_matches);
 
   if( isset($mreg)) {
     // Find matching metrics
     foreach ( $mreg as $key => $query ) {
-      foreach ( $index_array['metrics'] as $key => $m_name ) {
-        if ( preg_match("/$query/i", $key, $metric_subexpr ) ) {
+      foreach ( $index_array['metrics'] as $metric_key => $m_name ) {
+        if ( preg_match("/$query/i", $metric_key, $metric_subexpr ) ) {
           if (isset($metric_subexpr) && count($metric_subexpr) > 1) {
             $legend = array();
             for ($i = 1; $i < count($metric_subexpr); $i++) {
               $legend[] = $metric_subexpr[$i];
             }
-	    $metric_matches[$key] = implode(' ', $legend);
+	    $metric_matches[$metric_key] = implode(' ', $legend);
           } else {
-            $metric_matches[$key] = $key;
+            $metric_matches[$metric_key] = $metric_key;
           }
         }
       }
     }
     ksort($metric_matches);
   }
-  
   if( isset($metric_matches)){
     $metric_matches_unique = array_unique($metric_matches);
   }
@@ -1092,12 +1162,12 @@ function build_aggregate_graph_config ($graph_type,
     $metric_matches_unique = array($metric_name => $metric_name);
   }
 
-  if ( isset($matches)) {
+  if ( isset($host_matches)) {
 
-    $matches_unique = array_unique($matches);
+    $host_matches_unique = array_unique($host_matches);
 
     // Create graph_config series from matched hosts and metrics
-    foreach ( $matches_unique as $key => $host_cluster ) {
+    foreach ( $host_matches_unique as $key => $host_cluster ) {
 
       $out = explode("|", $host_cluster);
 
@@ -1143,43 +1213,12 @@ function build_aggregate_graph_config ($graph_type,
 //////////////////////////////////////////////////////////////////////////////
 //
 //////////////////////////////////////////////////////////////////////////////
-function retrieve_metrics_cache () {
+function retrieve_metrics_cache ( $index = "all" ) {
 
    global $conf, $index_array, $hosts, $grid, $clusters, $debug, $metrics, $context;
 
    require dirname(__FILE__) . '/lib/cache.php';
    return;
-
-   /*
-   if($conf['cachedata'] == 1 && file_exists($conf['cachefile'])) {
-      // check for the cached file
-      // snag it and return it if it is still fresh
-      $time_diff = time() - filemtime($conf['cachefile']);
-      $expires_in = $conf['cachetime'] - $time_diff;
-      if( $time_diff < $conf['cachetime']){
-          if ( $debug == 1 ) {
-            echo("DEBUG: Fetching data from cache. Expires in " . $expires_in . " seconds.\n");
-          }
-          $index_array = unserialize(file_get_contents($conf['cachefile']));
-      }
-   }
-
-   if ( ! isset($index_array) || sizeof($index_array) == 0 ) {
-
-      if ( $debug == 1 ) {
-         echo("DEBUG: Querying GMond for new data\n");
-      }
-      // Set up for cluster summary
-      $context = "index_array";
-      include_once $conf['gweb_root'] . "/ganglia.php";
-      Gmetad($conf['ganglia_ip'], $conf['ganglia_port']);
-
-      $index_array['hosts'] = array_keys($index_array['cluster']);
-
-      file_put_contents($conf['cachefile'], serialize($index_array));
-
-   }
-    */
 } // end of function get_metrics_cache () {
 
 function getHostOverViewData($hostname, 
@@ -1341,4 +1380,18 @@ function heuristic_urldecode($blob) {
   }
   return $blob;
 }
+
+// alternative passthru() implementation to avoid incomplete images shown in
+// browsers.
+function my_passthru($command) {
+  $tf = tempnam('/tmp', 'ganglia-graph.');
+  $ret = exec("$command > $tf");
+  $size = filesize($tf);
+  header("Content-Length: $size");
+  $fp = fopen($tf, 'rb');
+  fpassthru($fp);
+  fclose($fp);
+  unlink($tf);
+}
+
 ?>
